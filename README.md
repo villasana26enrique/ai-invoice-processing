@@ -21,6 +21,18 @@ You do not have to trust the model blindly: an invoice is approved without a per
 Errors block approval until they are fixed. Warnings need a reviewer's approval. No issues at all: approved
 automatically.
 
+## Demo data
+
+30 invoices from the suppliers of a fictional dental clinic, each supplier with its own layout: PDFs, phone
+photos (tilted, shadowed) and scans. Six are traps: a total that does not add up, a line with wrong math, an old
+invoice, a date covered by a stain, an unknown supplier and a duplicate sent again as a photo. Each one comes with
+its ground truth, used by the evaluations.
+
+```bash
+docker build -t invoice-demo-tools demo
+docker run --rm -v "$PWD/demo:/demo" invoice-demo-tools python /demo/generate_invoices.py   # -> demo/build/
+```
+
 ## Run it
 
 ```bash

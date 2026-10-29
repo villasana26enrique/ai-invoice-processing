@@ -59,6 +59,19 @@ who corrects, approves or rejects it. Every correction is recorded. Schema `invo
   behavior, and check it fails when the rule is broken on purpose. In assertion messages concatenate `r::text`,
   not `r`.
 
+## Demo invoices (`demo/`)
+
+- `demo/generate_invoices.py` builds 30 invoices of the fictional Maple Grove Dental Studio into `demo/build/`
+  (not committed): PDFs, phone photos and scans, one layout per supplier, plus `ground-truth.json` with what is
+  printed on each one and what the validation should decide.
+- Deterministic: a fixed seed per invoice and dates relative to `--as-of`. Same `--as-of`, same bytes.
+- The known suppliers are seeded by `V2__seed_demo_suppliers.sql`; keep names and tax ids in sync with the
+  generator. Riverbend Promotional Goods stays out on purpose (unknown supplier trap).
+- Traps: `wrong_total`, `line_math`, `old_date`, `illegible_date`, `unknown_supplier`, `duplicate` (invoice 01
+  photographed: different bytes, same number). A new trap needs its expected issues in `EXPECTED_ISSUES`.
+- After changing the generator or the rules, run the ground truth through the database as a perfect extraction:
+  every invoice must get its `expected_status` and `expected_issues`.
+
 ## Secrets
 
 - Never commit `.env`. Document every new variable in `.env.example` with a fake value.
@@ -72,4 +85,5 @@ who corrects, approves or rejects it. Every correction is recorded. Schema `invo
 | Start everything | `docker compose up -d` |
 | Apply migrations | `docker compose run --rm flyway` |
 | Database tests | see above |
+| Build the demo invoices | `docker build -t invoice-demo-tools demo && docker run --rm -v "$PWD/demo:/demo" invoice-demo-tools python /demo/generate_invoices.py` |
 | Database shell (owner) | `docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'` |

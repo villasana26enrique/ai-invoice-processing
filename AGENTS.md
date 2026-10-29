@@ -59,6 +59,27 @@ who corrects, approves or rejects it. Every correction is recorded. Schema `invo
   behavior, and check it fails when the rule is broken on purpose. In assertion messages concatenate `r::text`,
   not `r`.
 
+## n8n pipeline (`n8n/workflows/`)
+
+- `Extract: Process invoice` (sub-workflow, called by both entries) fingerprints the file (sha256), registers it,
+  saves the original to `/data/invoices/<sha256>.<ext>`, asks Gemini for the invoice as JSON (structured output:
+  `responseSchema`, file sent inline) and records the result or the failure. It always ends in one result item:
+  `{ok, action, document_id, status, issues, message, file_name}`.
+- `Ingest: Upload API` (`POST /webhook/invoices`, `X-API-Key`, multipart field `file`) answers with that result:
+  200, or 422 when the extraction failed; 400 for a bad request.
+- `Ingest: Sync Google Drive` (every 5 minutes) processes the files of `DRIVE_FOLDER_ID` it has never received.
+  A Drive file is processed once, even if edited later; the same bytes from both entries are one document.
+- The prompt asks for **what is printed, never corrected or inferred**: the database does the math. A value the
+  model cannot read must be null (a person fixes a null in seconds; a guess may get paid). Keep that rule when
+  editing the prompt, and run the evaluations after.
+- Primary model `gemini-3.1-flash-lite`, fallback `gemini-flash-lite-latest` on error. Every attempt that reaches
+  the database is in `extraction_runs` with its raw answer.
+- Workflows are generated, imported and exported like the other repos: `./scripts/reload-workflows.sh` after
+  editing the JSON, `./scripts/export-workflows.sh` after editing in n8n. Workflow ids are fixed (the upload API
+  and the sync call the sub-workflow by id).
+- `DRIVE_FOLDER_ID` is filled in at import (`prepare-import.js`) and put back as `__DRIVE_FOLDER_ID__` on export.
+- n8n can only touch files under `/data/invoices` (`N8N_RESTRICT_FILE_ACCESS_TO`).
+
 ## Demo invoices (`demo/`)
 
 - `demo/generate_invoices.py` builds 30 invoices of the fictional Maple Grove Dental Studio into `demo/build/`
@@ -74,6 +95,8 @@ who corrects, approves or rejects it. Every correction is recorded. Schema `invo
 
 ## Secrets
 
+- The Google service account key is a file outside the repository; `.env` only has its path. `setup-n8n.sh` reads it
+  and hands it to n8n, which stores it encrypted.
 - Never commit `.env`. Document every new variable in `.env.example` with a fake value.
 - Test with fake data (`TEST ...` suppliers and files) and remove it afterwards.
 - Before committing, check that no token, API key, password, phone number or email appears in the diff.
@@ -86,4 +109,9 @@ who corrects, approves or rejects it. Every correction is recorded. Schema `invo
 | Apply migrations | `docker compose run --rm flyway` |
 | Database tests | see above |
 | Build the demo invoices | `docker build -t invoice-demo-tools demo && docker run --rm -v "$PWD/demo:/demo" invoice-demo-tools python /demo/generate_invoices.py` |
+| Set up a fresh n8n (credentials + workflows) | `./scripts/setup-n8n.sh` |
+| Load workflow changes into n8n | `./scripts/reload-workflows.sh` |
+| Export workflows | `./scripts/export-workflows.sh` |
+| Send invoices to the upload API | `python scripts/upload-invoice.py demo/build/invoices/*` |
+| Sync Drive now | `docker compose exec -T -e N8N_RUNNERS_BROKER_PORT=5690 n8n n8n execute --id=sY6nC2gD8rV4eQwT` |
 | Database shell (owner) | `docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'` |

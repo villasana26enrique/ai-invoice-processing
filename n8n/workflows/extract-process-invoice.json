@@ -1,0 +1,809 @@
+{
+  "name": "Extract: Process invoice",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ],
+      "id": "88529341-e778-55a0-b9a6-208863952631",
+      "name": "Start"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// sha256 of the bytes: the same invoice sent twice (by Drive and by the web) is one document\nconst crypto = require('crypto');\nconst item = $input.first();\nconst start = item.json;\nconst fail = (error) => [{ json: { ok: false, error, file_name: start.file_name ?? null } }];\nif (!item.binary?.data) return fail('No file attached.');\n\nconst buffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst fileName = start.file_name || item.binary.data.fileName || 'invoice';\nconst byExtension = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };\nconst extension = fileName.includes('.') ? fileName.split('.').pop().toLowerCase() : '';\nconst mimeType = byExtension[extension] ?? start.mime_type ?? item.binary.data.mimeType;\nconst storedExtension = Object.entries(byExtension).find(([, type]) => type === mimeType)?.[0] ?? 'bin';\nconst sha256 = crypto.createHash('sha256').update(buffer).digest('hex');\n\nreturn [{\n  json: {\n    ok: true, source: start.source || 'upload', source_id: start.source_id || sha256, file_name: fileName,\n    mime_type: mimeType, sha256, storage_path: `${sha256}.${storedExtension}`,\n  },\n  binary: item.binary,\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "id": "8896e122-7bd9-535a-a4b9-140b59507b5b",
+      "name": "Fingerprint the file",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        440,
+        300
+      ],
+      "id": "a429f334-a7e8-5475-b117-2149817e3523",
+      "name": "Readable?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT invoicing.register_document($1, $2, $3, $4, $5, $6) AS r;",
+        "options": {
+          "queryReplacement": "={{ [$json.source, $json.source_id, $json.file_name, $json.mime_type, $json.sha256, $json.storage_path] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        660,
+        200
+      ],
+      "id": "99d73a8b-7c6e-5293-a19f-12d11c53a4f3",
+      "name": "Register document",
+      "credentials": {
+        "postgres": {
+          "id": "pI3nV7cA2pQ8xL5k",
+          "name": "Postgres invoice_app"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.r.ok && $json.r.action === 'registered' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        880,
+        200
+      ],
+      "id": "e7a410fc-7c02-58f6-a3dc-840ffb3e9fe1",
+      "name": "New file?"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ok",
+              "name": "ok",
+              "value": "={{ $json.r.ok }}",
+              "type": "boolean"
+            },
+            {
+              "id": "action",
+              "name": "action",
+              "value": "={{ $json.r.action ?? \"refused\" }}",
+              "type": "string"
+            },
+            {
+              "id": "document_id",
+              "name": "document_id",
+              "value": "={{ $json.r.document_id ?? null }}",
+              "type": "number"
+            },
+            {
+              "id": "status",
+              "name": "status",
+              "value": "={{ $json.r.status ?? 'failed' }}",
+              "type": "string"
+            },
+            {
+              "id": "issues",
+              "name": "issues",
+              "value": "={{ [] }}",
+              "type": "array"
+            },
+            {
+              "id": "message",
+              "name": "message",
+              "value": "={{ $json.r.message ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "file_name",
+              "name": "file_name",
+              "value": "={{ $('Start').first().json.file_name ?? $('Start').first().binary?.data?.fileName ?? '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1100,
+        400
+      ],
+      "id": "c60a1675-1b1a-5361-8df7-a1fe6b29f39e",
+      "name": "Already received or refused"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// The database node does not carry the file: take it back, with the new document id\nconst file = $('Fingerprint the file').first();\nreturn [{ json: { ...file.json, document_id: $input.first().json.r.document_id }, binary: file.binary }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        100
+      ],
+      "id": "b5ad6426-dece-5a7a-8c20-1858f775ba78",
+      "name": "Attach the file again"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// The file goes inline (base64) with the instructions and the exact JSON shape the answer must have\nconst PROMPT = \"You are reading a supplier invoice (a PDF, a phone photo or a scan) received by a dental clinic in the United States.\\n\\nExtract exactly what is printed. Do not calculate, correct or complete anything: if the printed total does not match the line items, return the printed total. Every check happens later, in the accounting system.\\n\\n- supplier_name: the company that issued the invoice (not the BILL TO customer), as printed.\\n- supplier_tax_id: the supplier's EIN (NN-NNNNNNN) only if it is printed on the invoice; otherwise null.\\n- invoice_number: as printed, with its prefix.\\n- invoice_date and due_date: YYYY-MM-DD. due_date is null when it says \\\"upon receipt\\\" or is not printed.\\n- If a date is covered, smudged, blurred or cut off, return null for it. Never work it out from other dates or from the payment terms.\\n- currency: ISO code; USD when amounts use $ and nothing says otherwise.\\n- subtotal, tax, shipping, total: plain numbers, no symbols or thousands separators. tax is 0 when printed as 0; shipping is 0 when there is no shipping line.\\n- lines: every line item on every page, in order. quantity and unit_price are null when the invoice does not show them; amount is the line total as printed.\\n\\nAny value you cannot read with confidence is null. A null is fixed by a person in seconds; a guess may be paid without anyone noticing.\";\nconst SCHEMA = {\n  \"type\": \"OBJECT\",\n  \"properties\": {\n    \"supplier_name\": {\n      \"type\": \"STRING\",\n      \"nullable\": true\n    },\n    \"supplier_tax_id\": {\n      \"type\": \"STRING\",\n      \"nullable\": true\n    },\n    \"invoice_number\": {\n      \"type\": \"STRING\",\n      \"nullable\": true\n    },\n    \"invoice_date\": {\n      \"type\": \"STRING\",\n      \"nullable\": true,\n      \"description\": \"YYYY-MM-DD\"\n    },\n    \"due_date\": {\n      \"type\": \"STRING\",\n      \"nullable\": true,\n      \"description\": \"YYYY-MM-DD\"\n    },\n    \"currency\": {\n      \"type\": \"STRING\",\n      \"nullable\": true\n    },\n    \"subtotal\": {\n      \"type\": \"NUMBER\",\n      \"nullable\": true\n    },\n    \"tax\": {\n      \"type\": \"NUMBER\",\n      \"nullable\": true\n    },\n    \"shipping\": {\n      \"type\": \"NUMBER\",\n      \"nullable\": true\n    },\n    \"total\": {\n      \"type\": \"NUMBER\",\n      \"nullable\": true\n    },\n    \"lines\": {\n      \"type\": \"ARRAY\",\n      \"items\": {\n        \"type\": \"OBJECT\",\n        \"properties\": {\n          \"description\": {\n            \"type\": \"STRING\",\n            \"nullable\": true\n          },\n          \"quantity\": {\n            \"type\": \"NUMBER\",\n            \"nullable\": true\n          },\n          \"unit_price\": {\n            \"type\": \"NUMBER\",\n            \"nullable\": true\n          },\n          \"amount\": {\n            \"type\": \"NUMBER\",\n            \"nullable\": true\n          }\n        },\n        \"required\": [\n          \"description\",\n          \"quantity\",\n          \"unit_price\",\n          \"amount\"\n        ],\n        \"propertyOrdering\": [\n          \"description\",\n          \"quantity\",\n          \"unit_price\",\n          \"amount\"\n        ]\n      }\n    }\n  },\n  \"required\": [\n    \"supplier_name\",\n    \"supplier_tax_id\",\n    \"invoice_number\",\n    \"invoice_date\",\n    \"due_date\",\n    \"currency\",\n    \"subtotal\",\n    \"tax\",\n    \"shipping\",\n    \"total\",\n    \"lines\"\n  ],\n  \"propertyOrdering\": [\n    \"supplier_name\",\n    \"supplier_tax_id\",\n    \"invoice_number\",\n    \"invoice_date\",\n    \"due_date\",\n    \"currency\",\n    \"subtotal\",\n    \"tax\",\n    \"shipping\",\n    \"total\",\n    \"lines\"\n  ]\n};\nconst item = $input.first();\nconst buffer = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst body = {\n  contents: [{ role: 'user', parts: [\n    { inlineData: { mimeType: item.json.mime_type, data: buffer.toString('base64') } },\n    { text: PROMPT },\n  ] }],\n  generationConfig: { responseMimeType: 'application/json', responseSchema: SCHEMA },\n};\nreturn [{ json: { ...item.json, body, started_at: Date.now() }, binary: item.binary }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        100
+      ],
+      "id": "75bee10e-153a-5577-ab7b-2d5d709afa73",
+      "name": "Build the request"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ '/data/invoices/' + $json.storage_path }}",
+        "dataPropertyName": "data",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        100
+      ],
+      "id": "6e8904d3-8c09-58ae-86e0-5a02213c89da",
+      "name": "Save the original",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build the request').first().json.body) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1760,
+        100
+      ],
+      "id": "7e99b601-faa5-5f49-a54c-c626e347a3cf",
+      "name": "Read with Gemini",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "gI8mK3pQ5wE1rT4z",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build the request').first().json.body) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1980,
+        260
+      ],
+      "id": "712189d8-df0e-5d72-885d-a1733eb9940e",
+      "name": "Read with the fallback model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "gI8mK3pQ5wE1rT4z",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Gemini answers with JSON text in the first candidate; anything else is a failed extraction\nconst request = $('Build the request').first().json;\nconst response = $input.first().json;\nconst candidate = response.candidates?.[0];\nconst text = (candidate?.content?.parts ?? []).map(part => part.text ?? '').join('');\nconst base = { document_id: request.document_id, model: response.modelVersion ?? 'gemini',\n  duration_ms: Date.now() - request.started_at };\ntry {\n  if (!text) throw new Error(`Empty answer (finish reason: ${candidate?.finishReason ?? 'none'})`);\n  return [{ json: { ...base, ok: true, output: JSON.parse(text) } }];\n} catch (error) {\n  return [{ json: { ...base, ok: false, error: 'The model did not return valid JSON: ' + error.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        100
+      ],
+      "id": "51637c61-29ce-5065-a049-5dd0263ba25c",
+      "name": "Parse the answer"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2420,
+        100
+      ],
+      "id": "dbc8941c-d08b-5ce3-84f0-0caf668e4a32",
+      "name": "Parsed?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT invoicing.record_extraction($1::bigint, $2, $3::jsonb, $4::int) AS r;",
+        "options": {
+          "queryReplacement": "={{ [$json.document_id, $json.model, JSON.stringify($json.output), $json.duration_ms] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2640,
+        0
+      ],
+      "id": "747403e1-d348-5b69-b64f-ad8aab0f896e",
+      "name": "Record extraction",
+      "credentials": {
+        "postgres": {
+          "id": "pI3nV7cA2pQ8xL5k",
+          "name": "Postgres invoice_app"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ok",
+              "name": "ok",
+              "value": "={{ $json.r.ok }}",
+              "type": "boolean"
+            },
+            {
+              "id": "action",
+              "name": "action",
+              "value": "registered",
+              "type": "string"
+            },
+            {
+              "id": "document_id",
+              "name": "document_id",
+              "value": "={{ $('Attach the file again').first().json.document_id }}",
+              "type": "number"
+            },
+            {
+              "id": "status",
+              "name": "status",
+              "value": "={{ $json.r.status ?? 'failed' }}",
+              "type": "string"
+            },
+            {
+              "id": "issues",
+              "name": "issues",
+              "value": "={{ $json.r.issues ?? [] }}",
+              "type": "array"
+            },
+            {
+              "id": "message",
+              "name": "message",
+              "value": "={{ $json.r.message ?? '' }}",
+              "type": "string"
+            },
+            {
+              "id": "file_name",
+              "name": "file_name",
+              "value": "={{ $('Start').first().json.file_name ?? $('Start').first().binary?.data?.fileName ?? '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        2860,
+        0
+      ],
+      "id": "4b333681-a4f8-58b7-aec6-370df5efa1a1",
+      "name": "Extracted"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT invoicing.record_extraction_failure($1::bigint, $2, $3, $4::int) AS r;",
+        "options": {
+          "queryReplacement": "={{ [$('Attach the file again').first().json.document_id, $json.model ?? 'gemini', (typeof $json.error === 'string' ? $json.error : ([$json.error?.message, $json.error?.description].filter(Boolean).join(': ') || $json.message || JSON.stringify($json).slice(0, 500))).slice(0, 2000), $json.duration_ms ?? null] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2640,
+        300
+      ],
+      "id": "4f11a3e4-458e-5ca8-b4a5-3b804c9f2012",
+      "name": "Record failure",
+      "credentials": {
+        "postgres": {
+          "id": "pI3nV7cA2pQ8xL5k",
+          "name": "Postgres invoice_app"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ok",
+              "name": "ok",
+              "value": "false",
+              "type": "boolean"
+            },
+            {
+              "id": "action",
+              "name": "action",
+              "value": "registered",
+              "type": "string"
+            },
+            {
+              "id": "document_id",
+              "name": "document_id",
+              "value": "={{ $('Attach the file again').first().json.document_id }}",
+              "type": "number"
+            },
+            {
+              "id": "status",
+              "name": "status",
+              "value": "failed",
+              "type": "string"
+            },
+            {
+              "id": "issues",
+              "name": "issues",
+              "value": "={{ [] }}",
+              "type": "array"
+            },
+            {
+              "id": "message",
+              "name": "message",
+              "value": "={{ $('Record failure').first().json.r?.ok ? 'The invoice could not be read; it can be retried.' : 'The invoice could not be read.' }}",
+              "type": "string"
+            },
+            {
+              "id": "file_name",
+              "name": "file_name",
+              "value": "={{ $('Start').first().json.file_name ?? $('Start').first().binary?.data?.fileName ?? '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        2860,
+        300
+      ],
+      "id": "ab0a0297-ff5d-51c0-9c30-9dea4efd425e",
+      "name": "Extraction failed"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ok",
+              "name": "ok",
+              "value": "false",
+              "type": "boolean"
+            },
+            {
+              "id": "action",
+              "name": "action",
+              "value": "refused",
+              "type": "string"
+            },
+            {
+              "id": "document_id",
+              "name": "document_id",
+              "value": "={{ null }}",
+              "type": "number"
+            },
+            {
+              "id": "status",
+              "name": "status",
+              "value": "failed",
+              "type": "string"
+            },
+            {
+              "id": "issues",
+              "name": "issues",
+              "value": "={{ [] }}",
+              "type": "array"
+            },
+            {
+              "id": "message",
+              "name": "message",
+              "value": "={{ typeof $json.error === 'string' ? $json.error : ([$json.error?.message, $json.error?.description].filter(Boolean).join(': ') || $json.message || JSON.stringify($json).slice(0, 500)) }}",
+              "type": "string"
+            },
+            {
+              "id": "file_name",
+              "name": "file_name",
+              "value": "={{ $('Start').first().json.file_name ?? $('Start').first().binary?.data?.fileName ?? '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        660,
+        460
+      ],
+      "id": "76d70e4e-6064-55bb-b651-c3a161045974",
+      "name": "Report failure"
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Fingerprint the file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fingerprint the file": {
+      "main": [
+        [
+          {
+            "node": "Readable?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Report failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Readable?": {
+      "main": [
+        [
+          {
+            "node": "Register document",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Report failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Register document": {
+      "main": [
+        [
+          {
+            "node": "New file?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Report failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New file?": {
+      "main": [
+        [
+          {
+            "node": "Attach the file again",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Already received or refused",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach the file again": {
+      "main": [
+        [
+          {
+            "node": "Build the request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build the request": {
+      "main": [
+        [
+          {
+            "node": "Save the original",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save the original": {
+      "main": [
+        [
+          {
+            "node": "Read with Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read with Gemini": {
+      "main": [
+        [
+          {
+            "node": "Parse the answer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Read with the fallback model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read with the fallback model": {
+      "main": [
+        [
+          {
+            "node": "Parse the answer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse the answer": {
+      "main": [
+        [
+          {
+            "node": "Parsed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsed?": {
+      "main": [
+        [
+          {
+            "node": "Record extraction",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record extraction": {
+      "main": [
+        [
+          {
+            "node": "Extracted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record failure": {
+      "main": [
+        [
+          {
+            "node": "Extraction failed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extraction failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "id": "pR4cI9nV2xT7kLmQ",
+  "tags": []
+}

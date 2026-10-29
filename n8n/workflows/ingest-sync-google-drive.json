@@ -1,0 +1,442 @@
+{
+  "name": "Ingest: Sync Google Drive",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        200
+      ],
+      "id": "eda77e1c-d55c-530e-8d40-edb64d0b39c0",
+      "name": "Every 5 minutes"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        400
+      ],
+      "id": "cacf209c-8846-54b6-942d-52f661aebce6",
+      "name": "Run now"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Filled in at import from DRIVE_FOLDER_ID (scripts/reload-workflows.sh); without it the sync does nothing\nconst FOLDER_ID = '__DRIVE_FOLDER_ID__';\nreturn FOLDER_ID.startsWith('__') ? [] : [{ json: { folder_id: FOLDER_ID } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "id": "3400fa0c-9b91-5c0f-bd1c-4605066d8e51",
+      "name": "Drive folder"
+    },
+    {
+      "parameters": {
+        "url": "https://www.googleapis.com/drive/v3/files",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ \"'\" + $json.folder_id + \"' in parents and trashed = false\" }}"
+            },
+            {
+              "name": "fields",
+              "value": "nextPageToken,files(id,name,mimeType)"
+            },
+            {
+              "name": "pageSize",
+              "value": "1000"
+            },
+            {
+              "name": "supportsAllDrives",
+              "value": "true"
+            },
+            {
+              "name": "includeItemsFromAllDrives",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        440,
+        300
+      ],
+      "id": "9754b0e9-a928-5ba7-bb3f-ec323322f739",
+      "name": "List files in the folder",
+      "credentials": {
+        "googleApi": {
+          "id": "dI6vR4sA9nK2hY7c",
+          "name": "Google Drive service account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// PDFs and photos only; other files in the folder are ignored\nconst listing = $input.first().json;\nif (listing.error || !Array.isArray(listing.files)) {\n  throw new Error('Could not list the Drive folder: ' + JSON.stringify(listing.error ?? listing).slice(0, 500));\n}\nconst supported = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];\nconst files = listing.files.filter(file => supported.includes(file.mimeType))\n  .map(file => ({ source: 'google_drive', source_id: file.id, file_name: file.name, mime_type: file.mimeType }));\nreturn [{ json: { files } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ],
+      "id": "1bbec957-1ea3-56ad-9a07-fe525394f079",
+      "name": "Prepare file list"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT coalesce(jsonb_agg(source_id), '[]') AS seen FROM invoicing.documents\nWHERE source = 'google_drive' AND source_id IN (SELECT jsonb_array_elements_text($1::jsonb));",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json.files.map(file => file.source_id))] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        880,
+        300
+      ],
+      "id": "95ab6c6e-7df8-5650-9601-b5d637b718bf",
+      "name": "Already received",
+      "credentials": {
+        "postgres": {
+          "id": "pI3nV7cA2pQ8xL5k",
+          "name": "Postgres invoice_app"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Only files never received before: a Drive file is processed once, even if it is edited later.\n// With nothing new, one item says so: the run ends in \"Nothing new\" instead of stopping here without a word.\nconst seen = new Set($input.first().json.seen ?? []);\nconst listed = $('Prepare file list').first().json.files;\nconst files = listed.filter(file => !seen.has(file.source_id));\nif (!files.length) return [{ json: { nothing_new: true, files_in_folder: listed.length } }];\nreturn files.map(json => ({ json }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ],
+      "id": "68a09769-e04f-5804-be4d-1092b45c1bf2",
+      "name": "Files to process"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ !$json.nothing_new }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1320,
+        300
+      ],
+      "id": "7fab6d71-55d3-5bb5-9971-411be061f88e",
+      "name": "Anything new?"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "processed",
+              "name": "processed",
+              "value": "={{ 0 }}",
+              "type": "number"
+            },
+            {
+              "id": "message",
+              "name": "message",
+              "value": "={{ 'No new invoices: the ' + $json.files_in_folder + ' files in the folder were already received.' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1540,
+        480
+      ],
+      "id": "0c1e4063-694c-5d23-be93-f6220d5edaa7",
+      "name": "Nothing new"
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://www.googleapis.com/drive/v3/files/' + $json.source_id + '?alt=media&supportsAllDrives=true' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1540,
+        300
+      ],
+      "id": "b8167aff-6361-533c-acee-b8e374835db7",
+      "name": "Download from Drive",
+      "credentials": {
+        "googleApi": {
+          "id": "dI6vR4sA9nK2hY7c",
+          "name": "Google Drive service account"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// The download replaces the item: put the file's details back next to its bytes\nreturn $input.all().map((item, i) => ({ json: $('Files to process').itemMatching(i).json, binary: item.binary }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        300
+      ],
+      "id": "4b8fc1e9-dfde-52ea-8b3b-69ebe2c248a7",
+      "name": "Keep the file details"
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "pR4cI9nV2xT7kLmQ",
+          "cachedResultName": "Extract: Process invoice"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1980,
+        300
+      ],
+      "id": "ddaf6ffa-66ba-514e-9be4-84f3e4bf21d4",
+      "name": "Process each invoice",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// One line per run: how many invoices each status got\nconst counts = {};\nfor (const { json } of $input.all()) counts[json.status ?? 'failed'] = (counts[json.status ?? 'failed'] ?? 0) + 1;\nreturn [{ json: { processed: $input.all().length, counts } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        300
+      ],
+      "id": "a1330dae-355c-5af3-84f5-a76b16a6088d",
+      "name": "Summary"
+    }
+  ],
+  "connections": {
+    "Every 5 minutes": {
+      "main": [
+        [
+          {
+            "node": "Drive folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run now": {
+      "main": [
+        [
+          {
+            "node": "Drive folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Drive folder": {
+      "main": [
+        [
+          {
+            "node": "List files in the folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List files in the folder": {
+      "main": [
+        [
+          {
+            "node": "Prepare file list",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare file list": {
+      "main": [
+        [
+          {
+            "node": "Already received",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already received": {
+      "main": [
+        [
+          {
+            "node": "Files to process",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Files to process": {
+      "main": [
+        [
+          {
+            "node": "Anything new?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anything new?": {
+      "main": [
+        [
+          {
+            "node": "Download from Drive",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nothing new",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download from Drive": {
+      "main": [
+        [
+          {
+            "node": "Keep the file details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep the file details": {
+      "main": [
+        [
+          {
+            "node": "Process each invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process each invoice": {
+      "main": [
+        [
+          {
+            "node": "Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "id": "sY6nC2gD8rV4eQwT",
+  "tags": []
+}

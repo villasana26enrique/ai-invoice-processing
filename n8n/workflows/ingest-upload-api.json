@@ -1,0 +1,196 @@
+{
+  "name": "Ingest: Upload API",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "invoices",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        300
+      ],
+      "id": "fd9bf757-caf4-5a41-a47f-2bf436b85956",
+      "name": "POST /invoices",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "uP9aK2eY6uR4tW1v",
+          "name": "Upload API key"
+        }
+      },
+      "webhookId": "5b0e6c1e-6d3f-4a8e-9f4b-2c7d1a9e3f60"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// multipart/form-data: file (required), source_id (optional: the caller's own id for the invoice)\nconst item = $input.first();\nconst fields = item.json.body ?? {};\nconst keys = Object.keys(item.binary ?? {});\nconst fail = (message) => [{ json: { ok: false, message } }];\nif (keys.length !== 1) return fail('Send one invoice as a multipart/form-data field named \"file\".');\nconst file = item.binary[keys[0]];\nconst fileName = file.fileName ?? 'invoice';\nif (!/\\.(pdf|jpe?g|png|webp)$/i.test(fileName)) return fail('Send a PDF or a photo (JPG, PNG or WebP).');\nreturn [{ json: { ok: true, source: 'upload', source_id: fields.source_id || '', file_name: fileName },\n          binary: { data: file } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "id": "2acb0dfa-540f-5810-b022-cb2c76b19876",
+      "name": "Validate upload"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        440,
+        300
+      ],
+      "id": "cbc69783-c91d-5cb3-8b84-37c5dc47fc49",
+      "name": "Valid?"
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "pR4cI9nV2xT7kLmQ",
+          "cachedResultName": "Extract: Process invoice"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        660,
+        200
+      ],
+      "id": "695e0628-d45c-579d-a0d8-6ae7f59236aa",
+      "name": "Process the invoice",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": "={{ $json.status === 'failed' ? 422 : 200 }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        880,
+        200
+      ],
+      "id": "54ace12e-1700-582c-9bd8-8aa51dd650f8",
+      "name": "Respond with the result"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: false, message: $json.message }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        660,
+        420
+      ],
+      "id": "44e661cd-03a3-5aa3-9710-98e7ab2efc14",
+      "name": "Reject the request"
+    }
+  ],
+  "connections": {
+    "POST /invoices": {
+      "main": [
+        [
+          {
+            "node": "Validate upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate upload": {
+      "main": [
+        [
+          {
+            "node": "Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid?": {
+      "main": [
+        [
+          {
+            "node": "Process the invoice",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject the request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process the invoice": {
+      "main": [
+        [
+          {
+            "node": "Respond with the result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "id": "uP7lD3aP5iK8nWqE",
+  "tags": []
+}

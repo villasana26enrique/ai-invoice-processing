@@ -80,6 +80,26 @@ who corrects, approves or rejects it. Every correction is recorded. Schema `invo
 - `DRIVE_FOLDER_ID` is filled in at import (`prepare-import.js`) and put back as `__DRIVE_FOLDER_ID__` on export.
 - n8n can only touch files under `/data/invoices` (`N8N_RESTRICT_FILE_ACCESS_TO`).
 
+## Review page (`web/`)
+
+- Next.js (App Router) + TypeScript + Tailwind CSS 4, built as a standalone server (`web` service, port 3010).
+- Pages are server components that read the database as `invoice_app` (`src/lib/`). Changes go through server
+  actions (`src/app/actions.ts`) that call the database functions; **no business rule in the page**. The actor is
+  always `session.user`.
+- Every page, action and route calls `requireSession()`; `src/proxy.ts` is only the first guard.
+- **Styles:** visual styles live in `src/components/ui/` (Button, Input, Card, Badge, Table, NavLink, ...), with
+  colors only from the `@theme` tokens in `src/app/globals.css`. Pages use Tailwind for layout only (grid, flex,
+  gaps, widths). Never a hex color or a color class outside `ui/`.
+- In `ui/`, a different look is a **variant prop** (`tone`, `variant`, `dense`, `numeric`), never a class that
+  overrides another for the same property (`border-line` + `border-error`): without tailwind-merge the order of the
+  generated CSS decides, not the order you wrote.
+- bigint ids are parsed as numbers (`src/lib/db.ts`); amounts (numeric) stay strings, and dates are read as text.
+- **TDD:** write the tests of the expected behavior first, see them fail, then the code. Vitest + Testing Library
+  (`npm test` in `web/`); component tests start with `// @vitest-environment jsdom`. Async server components
+  cannot be rendered in Vitest: test what they use, and check the page end to end. After a change, break the code
+  on purpose once to check a test catches it.
+- Reviewer password: `node web/scripts/hash-password.mjs` (prompts; never pass it as an argument).
+
 ## Demo invoices (`demo/`)
 
 - `demo/generate_invoices.py` builds 30 invoices of the fictional Maple Grove Dental Studio into `demo/build/`
@@ -114,4 +134,6 @@ who corrects, approves or rejects it. Every correction is recorded. Schema `invo
 | Export workflows | `./scripts/export-workflows.sh` |
 | Send invoices to the upload API | `python scripts/upload-invoice.py demo/build/invoices/*` |
 | Sync Drive now | `docker compose exec -T -e N8N_RUNNERS_BROKER_PORT=5690 n8n n8n execute --id=sY6nC2gD8rV4eQwT` |
+| Review page tests | `cd web && npm test` |
+| Rebuild the review page | `docker compose up -d --build web` |
 | Database shell (owner) | `docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'` |

@@ -1,6 +1,6 @@
 # AI Invoice Processing
 
-> Work in progress. The database rules and the extraction pipeline are done; the review page comes next.
+> Work in progress. The database rules, the extraction pipeline and the review page are done; evaluations come next.
 
 Supplier invoices arrive as PDFs or photos. A model reads them, **the database checks the numbers**, and only what
 does not add up goes to a person, who fixes it in seconds on a review page.
@@ -15,6 +15,8 @@ Google Drive folder ─┐
 Upload API (POST) ───┘                                                                                        │
                                                                      approved (nothing to look at) ◄──────────┤
                                                                      needs_review (with the reasons) ◄────────┘
+                                                                                │
+                                         review page (Next.js): fix, approve or reject ─► export approved (CSV)
 ```
 
 The model only reads: it returns what is printed, and null for what it cannot read. Every check is done by the
@@ -34,6 +36,20 @@ database, so the same rules apply to what the model read and to what a person co
 Errors block approval until they are fixed. Warnings need a reviewer's approval. No issues at all: approved
 automatically.
 
+## Review page
+
+A Next.js app (App Router, TypeScript, Tailwind CSS) at http://localhost:3010, for one reviewer:
+
+- **Inbox** by status (to review, approved, rejected, could not read), with why each invoice needs a look.
+- **Invoice page**: the original (PDF or photo) next to the editable fields and line items, with the fields the
+  database complained about marked in red (errors) or amber (warnings). Saving checks the invoice again.
+- **Approve** (blocked while there are errors), **reject** with a reason (also an approved invoice before it is
+  paid, or a file that could not be read), **upload** an invoice and **export** the approved ones as CSV.
+
+Pages read the database on the server, as `invoice_app`; saving, approving and rejecting call the same database
+functions as the pipeline, which record who did what. The reviewer signs in with a hashed password and a signed,
+`httpOnly` session cookie.
+
 ## Demo data
 
 30 invoices from the suppliers of a fictional dental clinic, each supplier with its own layout: PDFs, phone
@@ -50,11 +66,15 @@ docker run --rm -v "$PWD/demo:/demo" invoice-demo-tools python /demo/generate_in
 
 ```bash
 cp .env.example .env    # passwords, Gemini API key, service account key path, Drive folder
+node web/scripts/hash-password.mjs   # asks for the reviewer password; paste the result as REVIEWER_PASSWORD_HASH
 docker compose up -d
 ./scripts/setup-n8n.sh
 python scripts/upload-invoice.py demo/build/invoices/*     # after building the demo invoices
 docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1' < database/tests/invoice_tests.sql
+(cd web && npm ci && npm test)       # review page tests (Vitest)
 ```
+
+Then open http://localhost:3010 and sign in as the reviewer.
 
 ## License
 

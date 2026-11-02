@@ -66,6 +66,30 @@ services:
       invoice-files-permissions:
         condition: service_completed_successfully
 
+  # Review page (Next.js): reads the database as invoice_app and the originals read-only
+  web:
+    build: ./web
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      INVOICE_APP_PASSWORD: ${INVOICE_APP_PASSWORD}
+      REVIEWER_USERNAME: ${REVIEWER_USERNAME}
+      REVIEWER_PASSWORD_HASH: ${REVIEWER_PASSWORD_HASH}
+      SESSION_SECRET: ${SESSION_SECRET}
+      # Behind HTTPS in production: the session cookie is only sent over HTTPS
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # Uploads go through the same pipeline as everything else
+      N8N_UPLOAD_URL: http://n8n:5678/webhook/invoices
+      UPLOAD_API_KEY: ${UPLOAD_API_KEY}
+      FILES_DIR: /data/invoices
+    volumes:
+      - invoice_files:/data/invoices:ro
+    ports:
+      - "${WEB_HOST_PORT:-3010}:3000"
+    depends_on:
+      flyway:
+        condition: service_completed_successfully
+
   # A new Docker volume belongs to root; n8n runs as node (uid 1000) and must be able to write the originals
   invoice-files-permissions:
     image: busybox:1.36

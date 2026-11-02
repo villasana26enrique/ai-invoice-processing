@@ -232,6 +232,18 @@ BEGIN
          'A failed document can be retried: ' || r::text;
   ASSERT (SELECT count(*) FROM invoicing.extraction_runs WHERE document_id = doc) = 3, 'Every attempt is kept';
 
+  -- A file that will never be read (not an invoice, a blank page) is rejected so it leaves the queue
+  r := invoicing.register_document('upload', 'test-unreadable', 'TEST blank.jpg', 'image/jpeg', repeat('e', 64), 'test/e.jpg');
+  doc := (r->>'document_id')::bigint;
+  r := invoicing.record_extraction_failure(doc, 'test-model', 'No invoice found', 1000);
+  r := invoicing.reject_invoice(doc, 'test-reviewer', 'Not an invoice');
+  ASSERT (r->>'ok')::boolean AND (SELECT status = 'rejected' AND status_reason = 'Not an invoice' FROM invoicing.documents WHERE id = doc),
+         'A failed document can be rejected with a reason: ' || r::text;
+  ASSERT (SELECT actor FROM invoicing.review_events WHERE document_id = doc AND action = 'reject') = 'test-reviewer',
+         'The rejection records who did it';
+  r := invoicing.record_extraction(doc, 'test-model', pg_temp.clean_invoice('INV-6002'));
+  ASSERT (SELECT status FROM invoicing.documents WHERE id = doc) = 'rejected', 'A rejected document is not read again: ' || r::text;
+
   ---------------------------------------------------------------- invoice_app writes only through the functions
   BEGIN
     UPDATE invoicing.documents SET status = 'approved' WHERE id = copy;
